@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Asistencia con QR y Verificación Facial</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 1rem;
+            box-sizing: border-box;
+        }
+        .container {
+            background-color: #ffffff;
+            border-radius: 1.5rem;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            padding: 2.5rem;
+            width: 100%;
+            max-width: 40rem;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+        video, canvas {
+            width: 100%;
+            height: auto;
+            border-radius: 0.75rem;
+            background-color: #000;
+            aspect-ratio: 16 / 9;
+            object-fit: cover;
+        }
+        #qr-reader {
+            width: 100%;
+            border: 2px dashed #9ca3af;
+            border-radius: 0.75rem;
+        }
+        .button-primary {
+            background-image: linear-gradient(to right, #4338ca, #6d28d9);
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.75rem;
+            font-weight: 600;
+            transition: all 0.2s ease-in-out;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            cursor: pointer;
+            border: none;
+            outline: none;
+        }
+        .button-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15);
+        }
+        .button-primary:disabled {
+            background-image: linear-gradient(to right, #9ca3af, #d1d5db);
+            cursor: not-allowed;
+        }
+        .button-secondary {
+            background-color: #e5e7eb;
+            color: #4b5563;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.75rem;
+            font-weight: 600;
+            transition: all 0.2s ease-in-out;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            cursor: pointer;
+            border: none;
+            outline: none;
+        }
+        .button-secondary:hover {
+            background-color: #d1d5db;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15);
+        }
+        .message-box {
+            padding: 1rem;
+            border-radius: 0.5rem;
+            text-align: left;
+            word-wrap: break-word;
+        }
+        .message-success {
+            background-color: #d1fae5;
+            color: #065f46;
+            border-left: 4px solid #10b981;
+        }
+        .message-error {
+            background-color: #fee2e2;
+            color: #991b1b;
+            border-left: 4px solid #ef4444;
+        }
+        .message-info {
+            background-color: #e0f2fe;
+            color: #0c4a6e;
+            border-left: 4px solid #38bdf8;
+        }
+        .loading-spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-left-color: #4338ca;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 0.5rem;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .text-verified {
+            color: #10b981;
+        }
+        .text-unverified {
+            color: #ef4444;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-3xl font-bold text-gray-800">Registro de Asistencia</h1>
+        <p class="text-gray-600">Escanea tu código QR y luego mira a la cámara para verificar tu identidad.</p>
+
+        <div id="qr-reader" class="rounded-lg"></div>
+
+        <div class="relative w-full" id="camera-container">
+            <video id="videoInput" class="rounded-lg hidden"></video>
+            <canvas id="canvas" class="absolute top-0 left-0 hidden"></canvas>
+        </div>
+
+        <div id="student-info-section" class="hidden">
+            <p id="studentNameDisplay" class="text-xl font-semibold text-gray-700 mt-2"></p>
+            <p id="verificationStatusDisplay" class="text-lg mt-1">Estado: <span class="font-bold">Pendiente</span></p>
+        </div>
+
+        <button id="openCameraButton" class="button-primary mt-4 hidden">
+            Abrir Cámara
+        </button>
+
+        <button id="attendanceButton" class="button-primary" disabled>
+            <span id="attendanceButtonText">Esperando escaneo...</span>
+        </button>
+
+        <button id="resetButton" class="button-secondary text-gray-700 bg-gray-200 hover:bg-gray-300 p-3 rounded-lg font-semibold hidden">
+            Reiniciar
+        </button>
+
+        <div id="message" class="message-box hidden"></div>
+    </div>
+
+    <script>
+        window.onload = async function() {
+            const videoInput = document.getElementById('videoInput');
+            const canvas = document.getElementById('canvas');
+            const qrReaderElement = document.getElementById('qr-reader');
+            const studentNameDisplay = document.getElementById('studentNameDisplay');
+            const verificationStatusDisplay = document.getElementById('verificationStatusDisplay');
+            const openCameraButton = document.getElementById('openCameraButton');
+            const attendanceButton = document.getElementById('attendanceButton');
+            const attendanceButtonText = document.getElementById('attendanceButtonText');
+            const resetButton = document.getElementById('resetButton');
+            const studentInfoSection = document.getElementById('student-info-section');
+            const messageDiv = document.getElementById('message');
+
+            // --- CONFIGURACIÓN DEL GOOGLE APPS SCRIPT WEB APP ---
+            // Reemplaza esta URL con la URL de despliegue de tu Google Apps Script
+            const APPS_SCRIPT_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwcIMO45xUyvmNGTPcVerLrZA6CwKY868RWwPN1ogTF9KNF-T_25qts6bzds9znPqwp6A/exec';
+            // ---------------------------------------------------
+            
+            const MODELS_URL = 'modelos';
+            const FACE_MATCH_DISTANCE_THRESHOLD = 0.6;
+            
+            let stream = null;
+            let studentId = '';
+            let isVerified = false;
+            let labeledFaceDescriptors = null;
+            let attendanceInterval = null;
+            let qrScanner = null;
+            let cameraStarted = false;
+
+            function showMessage(text, type) {
+                messageDiv.textContent = text;
+                messageDiv.className = `message-box ${type}`;
+                messageDiv.classList.remove('hidden');
+            }
+
+            function hideMessage() {
+                messageDiv.classList.add('hidden');
+            }
+            
+            async function fetchWithRetry(url, options = {}, retries = 3) {
+                for (let i = 0; i < retries; i++) {
+                    try {
+                        const response = await fetch(url, options);
+                        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                        return response;
+                    } catch (error) {
+                        console.error(`Fetch attempt ${i + 1} failed for ${url}:`, error);
+                        if (i === retries - 1) throw error;
+                        await new Promise(res => setTimeout(res, 2 ** i * 1000));
+                    }
+                }
+            }
+
+            async function loadModelsAndDescriptors() {
+                showMessage('Cargando modelos de IA y descriptores faciales...', 'message-info');
+                try {
+                    await Promise.all([
+                        faceapi.nets.tinyFaceDetector.loadFromUri(MODELS_URL),
+                        faceapi.nets.faceLandmark68Net.loadFromUri(MODELS_URL),
+                        faceapi.nets.faceRecognitionNet.loadFromUri(MODELS_URL),
+                    ]);
+
+                    const response = await fetchWithRetry(`${APPS_SCRIPT_WEB_APP_URL}?action=getDescriptors`);
+                    const data = await response.json();
+
+                    if (data.status === 'success' && data.data) {
+                        labeledFaceDescriptors = data.data.map(d => 
+                            new faceapi.LabeledFaceDescriptors(d.id.toString(), [new Float32Array(d.descriptor)])
+                        );
+                        showMessage('Modelos y descriptores cargados. Listo para escanear QR o abrir la cámara.', 'message-success');
+                        startQrScanner();
+                        openCameraButton.classList.remove('hidden');
+                    } else {
+                        throw new Error(data.message || 'Error al obtener descriptores.');
+                    }
+                } catch (error) {
+                    showMessage('Error al cargar modelos o descriptores. Revisa la consola para más detalles.', 'message-error');
+                    console.error('Error loading models or descriptors:', error);
+                }
+            }
+
+            function startQrScanner() {
+                if (cameraStarted) return;
+                
+                qrScanner = new Html5Qrcode('qr-reader');
+                const qrCodeSuccessCallback = (decodedText, decodedResult) => {
+                    studentId = decodedText.trim();
+                    if (studentId) {
+                        qrScanner.stop().then(() => {
+                            showMessage(`QR de alumno ${studentId} escaneado con éxito. Iniciando verificación facial.`, 'message-info');
+                            getStudentName(studentId);
+                            startCameraAndVerify();
+                        }).catch(err => {
+                            console.error('Error al detener el escáner QR:', err);
+                            showMessage('Error al detener el escáner QR.', 'message-error');
+                        });
+                    }
+                };
+                const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+                qrScanner.start({ facingMode: "environment" }, config, qrCodeSuccessCallback);
+                qrReaderElement.classList.remove('hidden');
+            }
+            
+            function stopQrScanner() {
+                if (qrScanner && qrScanner.getState() === Html5Qrcode.State.SCANNING) {
+                    qrScanner.stop();
+                }
+                qrReaderElement.classList.add('hidden');
+            }
+
+            async function startCameraAndVerify() {
+                if (cameraStarted) return;
+                
+                stopQrScanner();
+                openCameraButton.classList.add('hidden');
+
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    videoInput.srcObject = stream;
+                    videoInput.classList.remove('hidden');
+                    canvas.classList.remove('hidden');
+                    studentInfoSection.classList.remove('hidden');
+                    cameraStarted = true;
+
+                    videoInput.addEventListener('loadedmetadata', async () => {
+                        await videoInput.play();
+                        canvas.width = videoInput.videoWidth;
+                        canvas.height = videoInput.videoHeight;
+                        attendanceInterval = setInterval(detectAndVerifyFace, 100);
+                    });
+                } catch (err) {
+                    showMessage('Error al acceder a la cámara. Asegúrate de dar permisos.', 'message-error');
+                    console.error('Error accessing camera:', err);
+                    cameraStarted = false;
+                    openCameraButton.classList.remove('hidden');
+                    startQrScanner();
+                }
+            }
+
+            async function detectAndVerifyFace() {
+                if (!labeledFaceDescriptors || labeledFaceDescriptors.length === 0) {
+                    return;
+                }
+                const detections = await faceapi.detectAllFaces(videoInput, new faceapi.TinyFaceDetectorOptions())
+                                                .withFaceLandmarks()
+                                                .withFaceDescriptors();
+
+                const displaySize = { width: videoInput.videoWidth, height: videoInput.videoHeight };
+                faceapi.matchDimensions(canvas, displaySize);
+                const resizedDetections = faceapi.resizeResults(detections, displaySize);
+                const context = canvas.getContext('2d');
+                context.clearRect(0, 0, canvas.width, canvas.height);
+                context.drawImage(videoInput, 0, 0, canvas.width, canvas.height);
+                faceapi.draw.drawDetections(canvas, resizedDetections);
+
+                if (detections.length > 0) {
+                    const faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, FACE_MATCH_DISTANCE_THRESHOLD);
+                    const bestMatch = faceMatcher.findBestMatch(detections[0].descriptor);
+
+                    if (bestMatch && bestMatch.label === studentId && bestMatch.distance < FACE_MATCH_DISTANCE_THRESHOLD) {
+                        isVerified = true;
+                        verificationStatusDisplay.innerHTML = `Estado: <span class="font-bold text-verified">Verificado</span>`;
+                        attendanceButton.disabled = false;
+                        attendanceButtonText.textContent = 'Registrar Asistencia';
+                    } else {
+                        isVerified = false;
+                        verificationStatusDisplay.innerHTML = `Estado: <span class="font-bold text-unverified">No Verificado</span>`;
+                        attendanceButton.disabled = true;
+                        attendanceButtonText.textContent = 'Buscando Coincidencia...';
+                    }
+                } else {
+                    verificationStatusDisplay.innerHTML = `Estado: <span class="font-bold">Rostro no detectado</span>`;
+                    isVerified = false;
+                    attendanceButton.disabled = true;
+                    attendanceButtonText.textContent = 'Buscando Rostro...';
+                }
+            }
+
+            function stopCamera() {
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                    videoInput.srcObject = null;
+                }
+                clearInterval(attendanceInterval);
+                videoInput.classList.add('hidden');
+                canvas.classList.add('hidden');
+                cameraStarted = false;
+            }
+
+            async function getStudentName(id) {
+                studentNameDisplay.textContent = 'Buscando nombre...';
+                try {
+                    const url = `${APPS_SCRIPT_WEB_APP_URL}?action=getStudentName&id=${encodeURIComponent(id)}`;
+                    const response = await fetchWithRetry(url);
+                    const data = await response.json();
+                    
+                    if (data.status === 'success') {
+                        studentNameDisplay.textContent = `Alumno: ${data.data.name}`;
+                    } else {
+                        studentNameDisplay.textContent = 'Alumno no encontrado';
+                    }
+                } catch (error) {
+                    console.error('Error al obtener el nombre del alumno:', error);
+                    studentNameDisplay.textContent = 'Error de conexión';
+                }
+            }
+
+            async function registerAttendance() {
+                attendanceButtonText.innerHTML = '<span class="loading-spinner"></span> Registrando...';
+                attendanceButton.disabled = true;
+                clearInterval(attendanceInterval);
+                stopCamera();
+                
+                try {
+                    const verificationStatus = isVerified ? 'Verificado' : 'No Verificado';
+                    
+                    canvas.width = videoInput.videoWidth;
+                    canvas.height = videoInput.videoHeight;
+                    canvas.getContext('2d').drawImage(videoInput, 0, 0, canvas.width, canvas.height);
+                    const imageData = canvas.toDataURL('image/jpeg');
+
+                    const payload = {
+                        action: 'attendance',
+                        id: studentId,
+                        imageData: imageData,
+                        verificationStatus: verificationStatus
+                    };
+                    
+                    const response = await fetchWithRetry(APPS_SCRIPT_WEB_APP_URL, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(payload)
+                    });
+
+                    const data = await response.json();
+
+                    if (data.status === 'success') {
+                        showMessage('Asistencia registrada con éxito.', 'message-success');
+                    } else {
+                        showMessage(`Error al registrar asistencia: ${data.message}`, 'message-error');
+                    }
+                } catch (error) {
+                    showMessage('Error de conexión con el servidor. Revisa tu URL de Apps Script.', 'message-error');
+                    console.error('Error registering attendance:', error);
+                } finally {
+                    resetButton.classList.remove('hidden');
+                    attendanceButton.classList.add('hidden');
+                }
+            }
+
+            function resetApp() {
+                stopCamera();
+                stopQrScanner();
+                studentId = '';
+                isVerified = false;
+                attendanceButton.disabled = true;
+                attendanceButtonText.textContent = 'Esperando escaneo...';
+                studentNameDisplay.textContent = '';
+                verificationStatusDisplay.innerHTML = `Estado: <span class="font-bold">Pendiente</span>`;
+                studentInfoSection.classList.add('hidden');
+                hideMessage();
+                resetButton.classList.add('hidden');
+                attendanceButton.classList.remove('hidden');
+                
+                startQrScanner();
+                openCameraButton.classList.remove('hidden');
+            }
+
+            openCameraButton.addEventListener('click', startCameraAndVerify);
+            attendanceButton.addEventListener('click', registerAttendance);
+            resetButton.addEventListener('click', resetApp);
+            window.addEventListener('beforeunload', stopCamera);
+
+            loadModelsAndDescriptors();
+        };
+    </script>
+</body>
+</html>
